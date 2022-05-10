@@ -1,0 +1,97 @@
+
+trigger:
+- master
+
+resources:
+  repositories:
+    - repository: self
+
+variables:
+  buildplatform: 'anycpu'
+  buildconfiguration: 'debug'
+  imageRepository: 'mcare21-masterapi-dev'
+  dockerfilePath: '$(Build.SourcesDirectory)/CA_MCare21_MasterAPI/Dockerfile'
+  tag: '$(Build.Buildnumber)'
+  containerregistry: 'MCareTestACRSC'
+  projectbasefolder: 'CA_MCare21_MasterAPI' 
+  kubernetesServiceConnection: 'DevKubernetCluster'
+  acrsecret: 'k8sacrauth'
+
+stages:
+- stage: Build
+  displayName: Build
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        containerRegistry: '$(containerregistry)'
+        repository: '$(imageRepository)'
+        command: 'buildAndPush'
+        Dockerfile: '$(dockerfilePath)'
+        buildContext: '$(build.Repository.localpath)'
+        tags: |
+          $(tag)
+          latest
+       
+   
+    - task: CopyFiles@2
+      inputs:
+          SourceFolder: '$(System.DefaultWorkingDirectory)/$(projectbasefolder)/Manifest'
+          Contents: '**/*.yml'
+          TargetFolder: '$(Build.ArtifactStagingDirectory)/$(projectbasefolder)'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(projectbasefolder)'
+        ArtifactName: 'yaml'
+        publishLocation: 'Container'
+
+- stage: 'deploy'
+  displayName: 'deploy to dev'
+  dependsOn: 'build'
+  jobs:
+      - job: 'deploy'
+        displayName: 'deploy to aks'
+        pool:
+         vmImage: 'ubuntu-latest'
+        steps:
+        - task: DownloadPipelineArtifact@2
+          inputs:
+            buildType: 'current'
+            artifactName: 'yaml'
+            itemPattern: '**/*.yml'
+            targetPath: '$(System.ArtifactsDirectory)/$(projectbasefolder)'
+        # - task: KubernetesManifest@0
+        #   inputs:
+        #     action: 'createSecret'
+        #     kubernetesServiceConnection: '$(kubernetesServiceConnection)'
+        #     namespace: 'default'
+        #     secretType: 'dockerRegistry'
+        #     secretName: '$(acrsecret)'
+        #     dockerRegistryEndpoint: 'DevMcare21devacr'
+
+        - task: KubernetesManifest@0
+          inputs:
+            action: 'deploy'
+            kubernetesServiceConnection: '$(kubernetesServiceConnection)'
+            namespace: 'default'
+            manifests: '$(System.ArtifactsDirectory)/$(projectbasefolder)/deployment.yml'
+            containers: 'mymcare21devacr.azurecr.io/$(imageRepository):latest'
+            # imagePullSecrets: '$(acrsecret)'
+        # - task: Kubernetes@1
+        #   inputs:
+        #     connectionType: 'Azure Resource Manager'
+        #     azureSubscriptionEndpoint: 'My-MCare21-DevOps-AzureSvc'
+        #     azureResourceGroup: 'MY-MCare21-Dev-RG'
+        #     kubernetesCluster: 'my-mcare21-dev-aks'
+        #     namespace: 'default'
+        #     command: 'apply'
+        #     useConfigurationFile: true
+        #     configuration: '$(System.ArtifactsDirectory)/$(projectbasefolder)/deployment.yml'
+        #     secretType: 'dockerRegistry'
+        #     containerRegistryType: 'Azure Container Registry'
+        
